@@ -1,0 +1,211 @@
+<!DOCTYPE html>
+<html lang="en"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Slack Monthly Time Entry Generator</title>
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>⏱️</text></svg>">
+<script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
+<style>
+:root{--bg:#f6f7f9;--card:#fff;--tx:#1b1f24;--mu:#667085;--bd:#e3e6ea;--ac:#2f5bea;--acs:#e8eefe;--wr:#b45309;--wb:#fef3c7;box-sizing:border-box;padding-top:env(safe-area-inset-top,0px);padding-bottom:env(safe-area-inset-bottom,0px);color-scheme:light}
+@media(prefers-color-scheme:dark){:root:not([data-theme="light"]){--bg:#14161a;--card:#1c1f25;--tx:#e8eaed;--mu:#9aa3b2;--bd:#2c3038;--ac:#7c9cff;--acs:#252b3d;--wr:#fbbf24;--wb:#3a2f12;color-scheme:dark}}
+:root[data-theme="dark"]{--bg:#14161a;--card:#1c1f25;--tx:#e8eaed;--mu:#9aa3b2;--bd:#2c3038;--ac:#7c9cff;--acs:#252b3d;--wr:#fbbf24;--wb:#3a2f12;color-scheme:dark}
+html{scroll-padding-top:env(safe-area-inset-top,0px)}
+body{margin:0;background:var(--bg);color:var(--tx);font:14px/1.45 system-ui,-apple-system,"Segoe UI",Roboto,sans-serif}
+main{max-width:1100px;margin:0 auto;padding:20px 16px 60px}
+h1{font-size:22px;margin:0 0 4px}h2{font-size:16px;margin:0 0 10px}
+.mu{color:var(--mu)}.card{background:var(--card);border:1px solid var(--bd);border-radius:12px;padding:16px;margin-top:16px}
+#drop{border:2px dashed var(--bd);border-radius:10px;padding:26px;text-align:center;cursor:pointer}
+#drop.on{border-color:var(--ac);background:var(--acs)}
+.row{display:flex;gap:10px;flex-wrap:wrap;align-items:center;margin-top:12px}
+select,input,textarea,button{font:inherit;color:var(--tx);background:var(--bg);border:1px solid var(--bd);border-radius:8px;padding:6px 10px}
+button{cursor:pointer}button.p{background:var(--ac);border-color:var(--ac);color:#fff;font-weight:600}button:disabled{opacity:.5;cursor:default}
+.err{color:#d92d20;margin-top:8px}.warn{background:var(--wb);color:var(--wr);padding:8px 12px;border-radius:8px;margin-top:10px}
+.stats{display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:10px}
+.st{background:var(--bg);border-radius:10px;padding:12px}.st b{display:block;font-size:22px}
+.tw{overflow-x:auto}table{border-collapse:collapse;width:100%}
+th,td{text-align:left;padding:7px 10px;border-bottom:1px solid var(--bd);white-space:nowrap}
+th.s{cursor:pointer;user-select:none}th.s:hover{color:var(--ac)}.r{text-align:right}
+td.emp{color:var(--ac);cursor:pointer}tr.sub td{background:var(--bg);font-size:13px}
+.hide{display:none}small{color:var(--mu)}
+</style></head><body><main>
+<h1>Slack Monthly Time Entry Generator</h1>
+<div class="mu">Upload a Slack JSON export → first-to-last message window per employee per working day. A calculated Slack window is a proxy for observed activity, not verified working hours.</div>
+
+<div class="card"><h2>1. Upload</h2>
+<div id="drop">Drag &amp; drop a Slack JSON file here, or click to browse<div id="fn" class="mu"></div></div>
+<input type="file" id="file" accept=".json,application/json" class="hide">
+<div class="row">
+<label>Month <select id="mon"></select></label>
+<label>Year <input id="yr" type="number" value="2026" style="width:80px"></label>
+<label>Timezone offset <select id="tz"><option value="330" selected>IST (UTC+05:30)</option><option value="0">UTC</option><option value="-300">US Eastern (UTC−05:00)</option><option value="60">CET (UTC+01:00)</option></select></label>
+<button class="p" id="go" disabled>Generate Monthly Report</button></div>
+<div id="err" class="err"></div><div id="info" class="mu" style="margin-top:8px"></div></div>
+
+<div class="card hide" id="map"><h2>2. Employees (map IDs to names)</h2>
+<div class="mu">A built-in Slack user map is preloaded, so IDs are already matched to names. Vivek, Isha, Niharika, Siddhant and Surbhi are excluded automatically by first name (case-insensitive). You can also tick Exclude manually (e.g. bots or integrations). Edits are remembered in this browser.</div>
+<div class="row"><label>Load an updated user map (.json, <code>{"ID":"Name"}</code>) <input type="file" id="mapfile" accept=".json,application/json"></label></div>
+<div id="mapwarn"></div>
+<div class="tw"><table><thead><tr><th>Slack user ID</th><th class="r">Messages</th><th>Name</th><th>Exclude</th></tr></thead><tbody id="mapb"></tbody></table></div>
+<details class="row"><summary>Bulk paste mapping (one <code>ID=Name</code> per line)</summary><textarea id="bulk" rows="4" style="width:100%" placeholder="U070MR49YJ2=Name"></textarea><button id="bulkgo">Apply</button></details></div>
+
+<div id="res" class="hide">
+<div class="card"><h2>Monthly Summary</h2><div class="stats" id="stats"></div>
+<div class="row"><button id="xd">Daily .xlsx</button><button id="cd">Daily .csv</button><button id="xs">Summary .xlsx</button><button id="cs">Summary .csv</button><span id="dmsg" class="mu"></span></div></div>
+<div class="card"><h2>Employee Monthly Summary</h2><small>Click a row to expand daily entries.</small><div class="tw"><table><thead><tr><th>Employee</th><th class="r">Active Days</th><th class="r">Total Slack Window</th></tr></thead><tbody id="sumb"></tbody></table></div></div>
+<div class="card"><h2>Daily Time Entries</h2>
+<div class="row"><label>Employee <select id="fe"><option value="">All</option></select></label><label>From <input type="date" id="ff"></label><label>To <input type="date" id="ft"></label><button id="fc">Clear</button></div>
+<div class="tw" style="margin-top:8px"><table><thead><tr><th class="s" data-k="emp">Employee ↕</th><th class="s" data-k="date">Working Date ↕</th><th>First Message</th><th>Last Message</th><th class="s r" data-k="min">Slack Window ↕</th></tr></thead><tbody id="dayb"></tbody></table></div>
+<small id="dcount"></small></div>
+<div class="card"><small>Window = latest − earliest message in the working day (not the sum of gaps). Messages 12:00–06:30 AM (inclusive) count toward the previous day. Replies are deduplicated by timestamp + user. Days with no messages are simply absent (“No Slack Activity”), never zero-hour entries. Durations are rounded to whole minutes per day; totals sum those rounded values so exports match the screen.</small></div>
+</div>
+
+<script>
+const MAP={"USLACKBOT":"Slackbot","U018FLJLB3J":"Siddhant Rathi","U019UTJ8LG2":"Surbhi Gupta","U01F9MA8D5W":"Google Drive","U02BBJHBP5K":"Google Calendar","U03BMA9VAEL":"Riddhi Singh","U03LDAWNY1J":"Vishal Pal","U03P4QL5X4J":"Loom","U04FTBLSNKV":"wrike","U0585E70N4A":"Sandeep Kumar","U05BDV4KBHN":"Spoiler","U05BHV8BZAT":"Saloni Rana","U05H219GRJP":"Shwetanshi","U05H22SPG74":"Simran","U05J0UQ4TAR":"Dixit Gautam","U05Q60B5ANP":"Box","U067R077TS5":"Tanya Bansal","U06EYA7LXC4":"Rini Sachan","U06JNQ50UV7":"Niharika Joshi","U06MLBVNEE9":"Pankhuri Gupta","U0705B54679":"Otter.ai","U070MR49YJ2":"Vinni Gupta","U0796BHLZ27":"Vaibhav Pathak","U0798SLUR4N":"Untitled Workflow","U079FCJ6WRZ":"24th June Alert","U07MAEVUR7G":"Isha","U07PR3U30HJ":"Hemant Kalra","U07R1DQLF2B":"OneDrive and SharePoint","U08300ZRVA7":"Anuj Kumar","U086F7BFMPX":"Empuls","U08L7JNMA2C":"Translate","U08LRDF69U5":"Mayurakshi Avasthy","U08P1UHMYLX":"Simple Poll","U093Q35B012":"Wishly (Birthday Bot)","U094J9MTV5J":"Isha Negi","U097TQLRZA6":"Aarzoo Agarwal","U099PF3DBRN":"Shradha Shree","U09AV5YQEPR":"Follow Up Reminder","U09B6TY3V3L":"KO Questions Reminder","U09BK3LMXJ4":"Aakriti Luthra","U09CF8MQ3N3":"Jahanvi","U09F5M140UV":"Rajat","U09JUTVMSP7":"SuperBotUS","U09M85YMEN9":"Item status notification","U09MQGQQG65":"Welcome message","U09TACZFXSA":"Rahul singh Parihar","U09UXV6QP4K":"Shruti Kumari","U0AA1833R5L":"IND x Chloe","U0ABSG2Q5PT":"Test","U0ABU22ADFW":"Todoist","U0AFTGGCJ7K":"Notis","U0AGY0YCUK0":"Notion","U0AQ4507AN4":"plant-and-desk-care-msg","U0AQBJU1ER3":"Status update","U0AQF1WE52N":"Metric tally reminder","U0AQST9T1B7":"karan datyal","U0B08G88YH4":"ChatGPT","U0B0T7RTB9T":"May week 1 goals","U0B7B5BMZSS":"Hot Sheet Reminder","U0B8L6Z17BJ":"Kuhu Jain","U0B9FE9T370":"Vivek Dagar","U0BLZPBHNNB":"Kritika Allawadhi","U0BRCFDNVST":"Weekly check in","U0BRTFX9YD7":"Forms","U0BT3N33F9Q":"HubSpot (Breeze)","U0C1GHXKZFX":"Lunch order reminder to Shruti","U0C1PQ37J6Q":"Prachi Chawla","U0C289Q0ZBQ":"Workload Manager","U0C6XJCDB0D":"Monthly App Subscription Renewal Check","U0C7TT74ZEV":"Google Meet"};
+const EXCL=['vivek','isha','niharika','siddhant','surbhi'];
+const MN=['January','February','March','April','May','June','July','August','September','October','November','December'];
+const $=id=>document.getElementById(id);
+let msgs=[],stats={},names={...MAP},manual={},daily=[],summary=[],sortK='date',sortD=1,open=new Set();
+try{const sv=JSON.parse(localStorage.getItem('slk-names')||'{}');for(const k in sv)if((sv[k]||'').trim()&&sv[k]!==MAP[k])names[k]=sv[k]}catch(e){}
+MN.forEach((m,i)=>$('mon').add(new Option(m,i)));$('mon').value=8;
+
+const pad=n=>String(n).padStart(2,'0');
+const hm=m=>pad(Math.floor(m/60))+':'+pad(m%60);
+const esc=s=>String(s).replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
+const nm=id=>{const n=(names[id]||'').trim();return !n?id:n==='Deactivated User'?'Deactivated User ('+id+')':n};
+const isEx=id=>{const n=(names[id]||'').trim().toLowerCase().split(/\s+/)[0];return EXCL.includes(n)||!!manual[id]};
+
+function collect(o,out,st,depth=0){
+  if(depth>40||o===null||typeof o!=='object')return;
+  if(Array.isArray(o)){o.forEach(x=>collect(x,out,st,depth+1));return}
+  if(o.ts!==undefined&&(o.user_id||o.user||o.bot_id||o.subtype)){
+    const uid=o.user_id||o.user;
+    const ts=parseFloat(o.ts);
+    if(o.bot_id||o.subtype==='bot_message'){st.bots++}
+    else if(!uid||!isFinite(ts)||ts<=0){st.bad++}
+    else out.push({ts,uid,text:String(o.text||'').slice(0,120)});
+  }
+  for(const k in o){if(k!=='rich_text'&&k!=='files'&&k!=='blocks')collect(o[k],out,st,depth+1)}
+}
+function parse(txt){
+  const st={bots:0,bad:0,dup:0};const raw=[];
+  collect(JSON.parse(txt),raw,st);
+  const seen=new Set(),out=[];
+  for(const m of raw){const k=m.ts+'|'+m.uid;if(seen.has(k)){st.dup++;continue}seen.add(k);out.push(m)}
+  return{out,st};
+}
+function loc(ts,off){const lt=Math.floor(ts)+off*60;return{lt,sod:((lt%86400)+86400)%86400,day:Math.floor(lt/86400)}}
+const dstr=day=>new Date(day*86400000).toISOString().slice(0,10);
+const tstr=(lt)=>{const s=((lt%86400)+86400)%86400;return pad(Math.floor(s/3600))+':'+pad(Math.floor(s%3600/60))};
+
+function compute(){
+  const off=parseInt($('tz').value),mo=+$('mon').value,yr=+$('yr').value;
+  const g={};let outside=0;
+  for(const m of msgs){
+    if(isEx(m.uid))continue;
+    const l=loc(m.ts,off);let wd=l.day;
+    if(l.sod<=23400)wd-=1; // 00:00–06:30 inclusive → previous day
+    const ds=dstr(wd);const d=new Date(wd*86400000);
+    if(d.getUTCMonth()!==mo||d.getUTCFullYear()!==yr){outside++;continue}
+    const k=m.uid+'|'+ds;const e=g[k]||(g[k]={uid:m.uid,date:ds,wd,first:m,last:m,fl:l,ll:l,n:0});
+    e.n++;if(m.ts<e.first.ts){e.first=m;e.fl=l}if(m.ts>e.last.ts){e.last=m;e.ll=l}
+  }
+  daily=Object.values(g).map(e=>{
+    const sec=e.last.ts-e.first.ts,min=Math.round(sec/60);
+    const tag=(l,wd)=>tstr(l.lt)+(l.day>wd?' (+1d)':'');
+    return{uid:e.uid,emp:nm(e.uid),date:e.date,first:tag(e.fl,e.wd),last:tag(e.ll,e.wd),min,n:e.n,
+      fTs:e.first.ts,lTs:e.last.ts,fTxt:e.first.text,lTxt:e.last.text}});
+  const s={};daily.forEach(d=>{const x=s[d.uid]||(s[d.uid]={uid:d.uid,emp:d.emp,days:0,min:0});x.days++;x.min+=d.min});
+  summary=Object.values(s).sort((a,b)=>a.emp.localeCompare(b.emp));
+  stats.outside=outside;
+}
+function render(){
+  compute();
+  $('res').classList.remove('hide');
+  const tm=summary.reduce((a,b)=>a+b.min,0),td=summary.reduce((a,b)=>a+b.days,0);
+  $('stats').innerHTML=[['Employees included',summary.length],['Employee-days with activity',td],['Sum of daily Slack windows',hm(tm)+' h'],['Messages outside month',stats.outside]]
+    .map(x=>`<div class="st">${x[0]}<b>${x[1]}</b></div>`).join('');
+  $('sumb').innerHTML=summary.map(s=>{
+    let h=`<tr data-u="${esc(s.uid)}" style="cursor:pointer"><td>${open.has(s.uid)?'▾':'▸'} ${esc(s.emp)}</td><td class="r">${s.days}</td><td class="r">${hm(s.min)}</td></tr>`;
+    if(open.has(s.uid))h+=daily.filter(d=>d.uid===s.uid).sort((a,b)=>a.date<b.date?-1:1).map(d=>`<tr class="sub"><td>&nbsp;&nbsp;${d.date}</td><td class="r">${d.first} → ${d.last}</td><td class="r">${hm(d.min)}</td></tr>`).join('');
+    return h}).join('')||'<tr><td colspan="3" class="mu">No Slack Activity in the selected month.</td></tr>';
+  const cur=$('fe').value;
+  $('fe').innerHTML='<option value="">All</option>'+summary.map(s=>`<option value="${esc(s.uid)}">${esc(s.emp)}</option>`).join('');
+  $('fe').value=cur;renderDaily();
+}
+function filtered(){
+  const e=$('fe').value,f=$('ff').value,t=$('ft').value;
+  const r=daily.filter(d=>(!e||d.uid===e)&&(!f||d.date>=f)&&(!t||d.date<=t));
+  const k=sortK;r.sort((a,b)=>{let x=a[k],y=b[k];const c=typeof x==='number'?x-y:String(x).localeCompare(String(y));return (c||a.date.localeCompare(b.date)||a.emp.localeCompare(b.emp))*sortD});
+  return r}
+function renderDaily(){
+  const r=filtered();
+  $('dayb').innerHTML=r.map(d=>`<tr><td class="emp" data-u="${esc(d.uid)}" title="${esc(d.n)} messages">${esc(d.emp)}</td><td>${d.date}</td><td title="${esc(d.fTxt)}">${d.first}</td><td title="${esc(d.lTxt)}">${d.last}</td><td class="r">${hm(d.min)}</td></tr>`).join('');
+  $('dcount').textContent=r.length+' entries shown — hover a time to see the message used.';
+}
+function mapTable(){
+  const ids=Object.entries(stats.counts).sort((a,b)=>b[1]-a[1]);
+  $('mapb').innerHTML=ids.map(([id,c])=>`<tr><td><code>${esc(id)}</code></td><td class="r">${c}</td><td><input data-id="${esc(id)}" value="${esc(names[id]||'')}" placeholder="Name"></td><td><input type="checkbox" data-x="${esc(id)}" ${isEx(id)?'checked':''}></td></tr>`).join('');
+  warn();$('map').classList.remove('hide');
+}
+function warn(){
+  const un=Object.keys(stats.counts).filter(id=>!(names[id]||'').trim()).length;
+  const ex=Object.keys(stats.counts).filter(isEx).length;
+  $('mapwarn').innerHTML=un?`<div class="warn">${un} of ${Object.keys(stats.counts).length} IDs have no name yet. Excluded employees can only be removed once their IDs are named (or ticked manually). Currently excluded: ${ex}.</div>`:'';
+}
+function saveNames(){try{localStorage.setItem('slk-names',JSON.stringify(names))}catch(e){}}
+
+// events
+const drop=$('drop');
+drop.onclick=()=>$('file').click();
+['dragover','dragenter'].forEach(e=>drop.addEventListener(e,ev=>{ev.preventDefault();drop.classList.add('on')}));
+['dragleave','drop'].forEach(e=>drop.addEventListener(e,ev=>{ev.preventDefault();drop.classList.remove('on')}));
+drop.addEventListener('drop',ev=>load(ev.dataTransfer.files[0]));
+$('file').onchange=e=>load(e.target.files[0]);
+function load(f){
+  $('err').textContent='';if(!f)return;
+  $('fn').textContent=f.name;
+  const r=new FileReader();
+  r.onload=()=>{try{
+    const{out,st}=parse(r.result);
+    if(!out.length)throw new Error('No valid messages found (need objects with "ts" and "user_id").');
+    msgs=out;stats={...st,counts:{}};out.forEach(m=>stats.counts[m.uid]=(stats.counts[m.uid]||0)+1);
+    $('info').textContent=`${out.length} unique messages parsed · ${st.dup} duplicates skipped · ${st.bots} bot messages skipped · ${st.bad} malformed records skipped.`;
+    $('go').disabled=false;mapTable();
+  }catch(e){msgs=[];$('go').disabled=true;$('err').textContent='Invalid or unsupported JSON: '+e.message}};
+  r.onerror=()=>$('err').textContent='Could not read the file.';
+  r.readAsText(f);
+}
+$('go').onclick=render;
+['mon','yr','tz'].forEach(i=>$(i).onchange=()=>{if(msgs.length&&!$('res').classList.contains('hide'))render()});
+$('mapb').addEventListener('change',e=>{
+  const t=e.target;
+  if(t.dataset.id!==undefined){names[t.dataset.id]=t.value;saveNames();const cb=document.querySelector(`[data-x="${CSS.escape(t.dataset.id)}"]`);if(cb)cb.checked=isEx(t.dataset.id)}
+  if(t.dataset.x!==undefined){manual[t.dataset.x]=t.checked}
+  warn();if(!$('res').classList.contains('hide'))render();
+});
+$('mapfile').onchange=e=>{const f=e.target.files[0];if(!f)return;const r=new FileReader();r.onload=()=>{try{const o=JSON.parse(r.result);if(!o||typeof o!=='object'||Array.isArray(o))throw new Error('Expected an object of ID: name pairs.');for(const k in o)if(typeof o[k]==='string'&&o[k].trim())names[k]=o[k];saveNames();if(msgs.length){mapTable();if(!$('res').classList.contains('hide'))render()}$('err').textContent=''}catch(x){$('err').textContent='Invalid user map: '+x.message}};r.readAsText(f)};
+$('bulkgo').onclick=()=>{
+  $('bulk').value.split('\n').forEach(l=>{const i=l.indexOf('=');if(i>0)names[l.slice(0,i).trim()]=l.slice(i+1).trim()});
+  saveNames();mapTable();if(!$('res').classList.contains('hide'))render();
+};
+$('sumb').addEventListener('click',e=>{const tr=e.target.closest('tr[data-u]');if(!tr)return;const u=tr.dataset.u;open.has(u)?open.delete(u):open.add(u);render()});
+$('dayb').addEventListener('click',e=>{const u=e.target.dataset.u;if(u){$('fe').value=u;renderDaily();window.scrollTo({top:$('dayb').getBoundingClientRect().top+scrollY-120,behavior:'smooth'})}});
+['fe','ff','ft'].forEach(i=>$(i).onchange=renderDaily);
+$('fc').onclick=()=>{$('fe').value=$('ff').value=$('ft').value='';renderDaily()};
+document.querySelectorAll('th.s').forEach(th=>th.onclick=()=>{const k=th.dataset.k;sortD=sortK===k?-sortD:1;sortK=k;renderDaily()});
+
+// export
+const dRows=()=>[...daily].sort((a,b)=>a.emp.localeCompare(b.emp)||a.date.localeCompare(b.date)).map(d=>({'Employee':d.emp,'Slack User ID':d.uid,'Working Date':d.date,'First Message':d.first,'Last Message':d.last,'Slack Window (HH:MM)':hm(d.min),'Slack Window (minutes)':d.min,'Messages':d.n,'First Message Ts (epoch)':d.fTs,'Last Message Ts (epoch)':d.lTs,'First Message Text':d.fTxt,'Last Message Text':d.lTxt}));
+const sRows=()=>summary.map(s=>({'Employee':s.emp,'Slack User ID':s.uid,'Active Days':s.days,'Total Slack Window (HH:MM)':hm(s.min),'Total Slack Window (minutes)':s.min}));
+async function save(name,data){
+  try{const dl=await claude.use('downloads');if(!dl)throw new Error('Downloads are not available in this view.');
+    await dl.save({filename:name,data});$('dmsg').textContent='Saved '+name}
+  catch(e){$('dmsg').textContent=e&&e.code==='declined'?'Save cancelled.':'Could not save: '+(e&&e.message||e)}
+}
+function csv(rows){if(!rows.length)return'';const h=Object.keys(rows[0]);const q=v=>'"'+String(v).replace(/"/g,'""')+'"';return '\ufeff'+[h.map(q).join(',')].concat(rows.map(r=>h.map(k=>q(r[k])).join(','))).join('\n')}
+function xl(rows,sheet){const wb=XLSX.utils.book_new();XLSX.utils.book_append_sheet(wb,XLSX.utils.json_to_sheet(rows),sheet);return XLSX.write(wb,{type:'array',bookType:'xlsx'})}
+const tag=()=>`${MN[+$('mon').value]}-${$('yr').value}`;
+$('xd').onclick=()=>save(`daily-entries-${tag()}.xlsx`,xl(dRows(),'Daily Entries'));
+$('cd').onclick=()=>save(`daily-entries-${tag()}.csv`,csv(dRows()));
+$('xs').onclick=()=>save(`monthly-summary-${tag()}.xlsx`,xl(sRows(),'Monthly Summary'));
+$('cs').onclick=()=>save(`monthly-summary-${tag()}.csv`,csv(sRows()));
+</script></main></body></html>
